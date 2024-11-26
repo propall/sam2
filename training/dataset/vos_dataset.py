@@ -73,6 +73,10 @@ class VOSDataset(VisionDataset):
 
         datapoint = self.construct(video, sampled_frms_and_objs, segment_loader)
         for transform in self._transforms:
+            # print("=====================================")
+            # print(f"Transforms used: ", self._transforms)
+            # print("=====================================")
+            # StopExecution
             datapoint = transform(datapoint, epoch=self.curr_epoch)
         return datapoint
 

@@ -526,3 +526,117 @@ class RandomMosaicVideoAPI:
             )
 
         return datapoint
+
+####################################
+from torchvision.transforms.autoaugment import AutoAugment, AugMix
+
+class AutoAugmentAPI:
+    """Wrapper for AutoAugment to work with VideoDatapoint structure"""
+    def __init__(self, consistent_transform=True, policy="imagenet"):
+        self.consistent_transform = consistent_transform
+        self.transform = AutoAugment(policy=policy)
+        
+    def __call__(self, datapoint, **kwargs):
+        if self.consistent_transform:
+            # Apply same augmentation to all frames
+            aug_params = self.transform._get_random_operation()
+            for img in datapoint.frames:
+                img.data = aug_params(img.data)
+        else:
+            # Apply different augmentation to each frame
+            for img in datapoint.frames:
+                img.data = self.transform(img.data)
+        return datapoint
+
+class AugMixAPI:
+    """Wrapper for AugMix to work with VideoDatapoint structure"""
+    def __init__(self, consistent_transform=True, severity=3, width=3, depth=-1, alpha=1.):
+        self.consistent_transform = consistent_transform
+        self.transform = AugMix(
+            severity=severity,
+            width=width,
+            depth=depth,
+            alpha=alpha
+        )
+        
+    def __call__(self, datapoint, **kwargs):
+        if self.consistent_transform:
+            # Apply same augmentation to all frames
+            aug_params = self.transform._get_random_operation()
+            for img in datapoint.frames:
+                img.data = aug_params(img.data)
+        else:
+            # Apply different augmentation to each frame
+            for img in datapoint.frames:
+                img.data = self.transform(img.data)
+        return datapoint
+
+class RandomInvertAPI:
+    """Wrapper for RandomInvert to work with VideoDatapoint structure
+    Particularly useful for handling both black and white backgrounds
+    """
+    def __init__(self, consistent_transform=True, p=0.5):
+        self.consistent_transform = consistent_transform
+        self.p = p
+        self.transform = T.RandomInvert(p=1.0)  # We'll handle probability ourselves
+        
+    def __call__(self, datapoint, **kwargs):
+        if self.consistent_transform:
+            # Apply same inversion to all frames
+            if torch.rand(1) < self.p:
+                for img in datapoint.frames:
+                    img.data = self.transform(img.data)
+                    # Also invert any segmentation masks if they exist
+                    for obj in img.objects:
+                        if obj.segment is not None:
+                            obj.segment = 255 - obj.segment
+        else:
+            # Apply different inversion to each frame
+            for img in datapoint.frames:
+                if torch.rand(1) < self.p:
+                    img.data = self.transform(img.data)
+                    # Invert masks for this frame
+                    for obj in img.objects:
+                        if obj.segment is not None:
+                            obj.segment = 255 - obj.segment
+        return datapoint
+
+# Optional: Enhanced version with background detection
+class AdaptiveRandomInvertAPI(RandomInvertAPI):
+    """Enhanced version that detects background color and inverts accordingly"""
+    def __init__(self, consistent_transform=True, p=0.5, bg_threshold=240):
+        super().__init__(consistent_transform, p)
+        self.bg_threshold = bg_threshold
+        
+    def should_invert(self, image):
+        # Convert to PIL if tensor
+        if isinstance(image, torch.Tensor):
+            if image.dim() == 3:
+                # Convert CHW to HWC for analysis
+                image = image.permute(1, 2, 0)
+            # Compute mean of pixels
+            is_dark_bg = image.mean() < 127
+            return is_dark_bg
+        else:
+            # For PIL images
+            return F.to_tensor(image).mean() < 0.5
+        
+    def __call__(self, datapoint, **kwargs):
+        if self.consistent_transform:
+            if torch.rand(1) < self.p:
+                # Check first frame's background
+                should_invert = self.should_invert(datapoint.frames[0].data)
+                if should_invert:
+                    for img in datapoint.frames:
+                        img.data = self.transform(img.data)
+                        for obj in img.objects:
+                            if obj.segment is not None:
+                                obj.segment = 255 - obj.segment
+        else:
+            for img in datapoint.frames:
+                if torch.rand(1) < self.p and self.should_invert(img.data):
+                    img.data = self.transform(img.data)
+                    for obj in img.objects:
+                        if obj.segment is not None:
+                            obj.segment = 255 - obj.segment
+        return datapoint
