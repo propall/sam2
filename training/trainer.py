@@ -22,6 +22,8 @@ import torch.nn as nn
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
 
+from torch.profiler import profile, record_function, ProfilerActivity # Added by Manjunadh
+
 from training.optimizer import construct_optimizer
 
 from training.utils.checkpoint_utils import (
@@ -311,15 +313,15 @@ class Trainer:
             self.model.register_comm_hook(process_group, hook)
 
     def _move_to_device(self):
-        logging.info(
-            f"Moving components to device {self.device} and local rank {self.local_rank}."
-        )
+        # logging.info(
+        #     f"Moving components to device {self.device} and local rank {self.local_rank}."
+        # )
 
         self.model.to(self.device)
 
-        logging.info(
-            f"Done moving components to device {self.device} and local rank {self.local_rank}."
-        )
+        # logging.info(
+        #     f"Done moving components to device {self.device} and local rank {self.local_rank}."
+        # )
 
     def save_checkpoint(self, epoch, checkpoint_names=None):
         checkpoint_folder = self.checkpoint_conf.save_dir
@@ -414,9 +416,9 @@ class Trainer:
             self.checkpoint_conf.model_weight_initializer
         )
         if model_weight_initializer is not None:
-            logging.info(
-                f"Loading pretrained checkpoint from {self.checkpoint_conf.model_weight_initializer}"
-            )
+            # logging.info(
+            #     f"Loading pretrained checkpoint from {self.checkpoint_conf.model_weight_initializer}"
+            # )
             self.model = model_weight_initializer(model=self.model)
 
     def _load_resuming_checkpoint(self, ckpt_path: str):
@@ -529,6 +531,7 @@ class Trainer:
         while self.epoch < self.max_epochs:
             dataloader = self.train_dataset.get_loader(epoch=int(self.epoch))
             barrier()
+
             outs = self.train_epoch(dataloader)
             self.logger.log_dict(outs, self.epoch)  # Logged only on rank 0
 
@@ -562,6 +565,65 @@ class Trainer:
             self.epoch += 1
         # epoch was incremented in the loop but the val step runs out of the loop
         self.epoch -= 1
+
+
+    # def run_train(self):
+
+    #     while self.epoch < self.max_epochs:
+    #         dataloader = self.train_dataset.get_loader(epoch=int(self.epoch))
+    #         barrier()
+
+    #         # Adding the profiler here
+    #         with profile(  
+    #             activities=[
+    #                 ProfilerActivity.CPU,
+    #                 ProfilerActivity.CUDA
+    #             ],
+    #             record_shapes=True,
+    #             profile_memory=True,
+    #             with_stack=True
+    #         ) as prof:
+    #             # Wrapping the entire training loop for one epoch
+    #             with record_function("epoch_train"):
+    #                 outs = self.train_epoch(dataloader)
+            
+    #         # Print profiling summary
+    #         if self.distributed_rank == 0:
+    #             logging.info(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=20))
+
+    #         self.logger.log_dict(outs, self.epoch)  # Logged only on rank 0
+
+    #         # log train to text file.
+    #         if self.distributed_rank == 0:
+    #             with g_pathmgr.open(
+    #                 os.path.join(self.logging_conf.log_dir, "train_stats.json"),
+    #                 "a",
+    #             ) as f:
+    #                 f.write(json.dumps(outs) + "\n")
+
+    #         # Save checkpoint before validating
+    #         self.save_checkpoint(self.epoch + 1)
+
+    #         del dataloader
+    #         gc.collect()
+
+    #         # Run val, not running on last epoch since will run after the
+    #         # loop anyway
+    #         if self.is_intermediate_val_epoch(self.epoch):
+    #             self.run_val()
+
+    #         if self.distributed_rank == 0:
+    #             self.best_meter_values.update(self._get_trainer_state("train"))
+    #             with g_pathmgr.open(
+    #                 os.path.join(self.logging_conf.log_dir, "best_stats.json"),
+    #                 "a",
+    #             ) as f:
+    #                 f.write(json.dumps(self.best_meter_values) + "\n")
+
+    #         self.epoch += 1
+    #     # epoch was incremented in the loop but the val step runs out of the loop
+    #     self.epoch -= 1
+
 
     def run_val(self):
         if not self.val_dataset:
@@ -700,6 +762,155 @@ class Trainer:
             f"Trainer/steps_{phase}": self.steps[phase],
         }
 
+
+    # def train_epoch(self, train_loader):
+
+    #     # Init stat meters
+    #     batch_time_meter = AverageMeter("Batch Time", self.device, ":.2f")
+    #     data_time_meter = AverageMeter("Data Time", self.device, ":.2f")
+    #     mem_meter = MemMeter("Mem (GB)", self.device, ":.2f")
+    #     data_times = []
+    #     phase = Phase.TRAIN
+
+    #     iters_per_epoch = len(train_loader)
+
+    #     loss_names = []
+    #     for batch_key in self.loss.keys():
+    #         loss_names.append(f"Losses/{phase}_{batch_key}_loss")
+
+    #     loss_mts = OrderedDict(
+    #         [(name, AverageMeter(name, self.device, ":.2e")) for name in loss_names]
+    #     )
+    #     extra_loss_mts = {}
+
+    #     progress = ProgressMeter(
+    #         iters_per_epoch,
+    #         [
+    #             batch_time_meter,
+    #             data_time_meter,
+    #             mem_meter,
+    #             self.time_elapsed_meter,
+    #             *loss_mts.values(),
+    #         ],
+    #         self._get_meters([phase]),
+    #         prefix="Train Epoch: [{}]".format(self.epoch),
+    #     )
+
+    #     # Model training loop
+    #     self.model.train()
+    #     end = time.time()
+
+    #     for data_iter, batch in enumerate(train_loader):
+    #         # measure data loading time
+    #         data_time_meter.update(time.time() - end)
+    #         data_times.append(data_time_meter.val)
+    #         batch = batch.to(
+    #             self.device, non_blocking=True
+    #         )  # move tensors in a tensorclass
+
+    #         # Adding the profiler here for each batch
+    #         with profile(
+    #             activities=[
+    #                 ProfilerActivity.CPU,
+    #                 ProfilerActivity.CUDA
+    #             ],
+    #             record_shapes=True,
+    #             profile_memory=True,
+    #             with_stack=True
+    #         ) as prof:
+    #             # Wrapping each training step
+    #             with record_function("batch_train"):
+
+    #                 try:
+    #                     self._run_step(batch, phase, loss_mts, extra_loss_mts)
+
+    #                     # compute gradient and do optim step
+    #                     exact_epoch = self.epoch + float(data_iter) / iters_per_epoch
+    #                     self.where = float(exact_epoch) / self.max_epochs
+    #                     assert self.where <= 1 + self.EPSILON
+    #                     if self.where < 1.0:
+    #                         self.optim.step_schedulers(
+    #                             self.where, step=int(exact_epoch * iters_per_epoch)
+    #                         )
+    #                     else:
+    #                         logging.warning(
+    #                             f"Skipping scheduler update since the training is at the end, i.e, {self.where} of [0,1]."
+    #                         )
+
+    #                     # Log schedulers
+    #                     if data_iter % self.logging_conf.log_scalar_frequency == 0:
+    #                         for j, param_group in enumerate(self.optim.optimizer.param_groups):
+    #                             for option in self.optim.schedulers[j]:
+    #                                 optim_prefix = (
+    #                                     "" + f"{j}_"
+    #                                     if len(self.optim.optimizer.param_groups) > 1
+    #                                     else ""
+    #                                 )
+    #                                 self.logger.log(
+    #                                     os.path.join("Optim", f"{optim_prefix}", option),
+    #                                     param_group[option],
+    #                                     self.steps[phase],
+    #                                 )
+
+    #                     # Clipping gradients and detecting diverging gradients
+    #                     if self.gradient_clipper is not None:
+    #                         self.scaler.unscale_(self.optim.optimizer)
+    #                         self.gradient_clipper(model=self.model)
+
+    #                     if self.gradient_logger is not None:
+    #                         self.gradient_logger(
+    #                             self.model, rank=self.distributed_rank, where=self.where
+    #                         )
+
+    #                     # Optimizer step: the scaler will make sure gradients are not
+    #                     # applied if the gradients are infinite
+    #                     self.scaler.step(self.optim.optimizer)
+    #                     self.scaler.update()
+
+    #                     # measure elapsed time
+    #                     batch_time_meter.update(time.time() - end)
+    #                     end = time.time()
+
+    #                     self.time_elapsed_meter.update(
+    #                         time.time() - self.start_time + self.ckpt_time_elapsed
+    #                     )
+
+    #                     mem_meter.update(reset_peak_usage=True)
+    #                     if data_iter % self.logging_conf.log_freq == 0:
+    #                         progress.display(data_iter)
+
+    #                     if data_iter % self.logging_conf.log_scalar_frequency == 0:
+    #                         # Log progress meters.
+    #                         for progress_meter in progress.meters:
+    #                             self.logger.log(
+    #                                 os.path.join("Step_Stats", phase, progress_meter.name),
+    #                                 progress_meter.val,
+    #                                 self.steps[phase],
+    #                             )
+
+    #                 # Catching NaN/Inf errors in the loss
+    #                 except FloatingPointError as e:
+    #                     raise e
+            
+    #         # Print profiling summary for each batch
+    #         if self.distributed_rank == 0:
+    #             logging.info(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=20))
+
+    #     self.est_epoch_time[Phase.TRAIN] = batch_time_meter.avg * iters_per_epoch
+    #     self._log_timers(Phase.TRAIN)
+    #     self._log_sync_data_times(Phase.TRAIN, data_times)
+
+    #     out_dict = self._log_meters_and_save_best_ckpts([Phase.TRAIN])
+
+    #     for k, v in loss_mts.items():
+    #         out_dict[k] = v.avg
+    #     for k, v in extra_loss_mts.items():
+    #         out_dict[k] = v.avg
+    #     out_dict.update(self._get_trainer_state(phase))
+    #     logging.info(f"Losses and meters: {out_dict}")
+    #     self._reset_meters([phase])
+    #     return out_dict
+
     def train_epoch(self, train_loader):
 
         # Init stat meters
@@ -830,6 +1041,8 @@ class Trainer:
         logging.info(f"Losses and meters: {out_dict}")
         self._reset_meters([phase])
         return out_dict
+
+
 
     def _log_sync_data_times(self, phase, data_times):
         data_times = all_reduce_max(torch.tensor(data_times)).tolist()
@@ -993,7 +1206,7 @@ class Trainer:
         self.logger = Logger(self.logging_conf)
 
         self.model = instantiate(self.model_conf, _convert_="all")
-        print_model_summary(self.model)
+        # print_model_summary(self.model)
 
         self.loss = None
         if self.loss_conf:

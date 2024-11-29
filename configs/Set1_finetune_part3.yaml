@@ -2,26 +2,29 @@
 
 scratch:
   num_frames: 1
-  num_epochs: 40
+  num_epochs: 120 # total 280
   resolution: 640
-  train_batch_size: 1
+  train_batch_size: 1 #4 till 71 epochs
   num_train_workers: 10
-  max_num_objects: 3
-  base_lr: 5.0e-06
-  vision_lr: 3.0e-06
+  max_num_objects: 50
+  base_lr: 5e-6 #5e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs, 1e-6 for finetuning Set1 for 250 epochs
+  vision_lr: 3e-6 # 3e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs, 1e-6 for finetuning Set1 for 250 epochs
   phases_per_epoch: 1
 
 dataset:
-  img_folder: "../floorplan_datasets/Set2/train" # PATH for images
-  gt_folder: "../floorplan_datasets/Set2/train" # PATH for JSON annotations
+  # PATHS to Dataset Set1 is broken into 3 parts are present in output folder
+  img_folder: "floorplan_datasets/Set1/train/output/images3" # PATH for images
+  gt_folder: "floorplan_datasets/Set1/train/output/annotations3" # PATH for JSON annotations
 
-  # multiplier: 2
+  #file_list_txt: training/assets/MOSE_sample_train_list.txt # Optional PATH to filelist containing a subset of videos to be used for training
+  multiplier: 2
 
 # Video transforms
 vos:
   train_transforms:
     - _target_: training.dataset.transforms.ComposeAPI
       transforms:
+        
         - _target_: training.dataset.transforms.RandomHorizontalFlip
           consistent_transform: True
         - _target_: training.dataset.transforms.RandomAffine
@@ -80,8 +83,9 @@ trainer:
           temperature: 10000
         d_model: 256
         backbone_channel_list: [896, 448, 224, 112]
-        fpn_top_down_levels: [2, 3]  # output level 0 and 1 directly use the backbone features
+        fpn_top_down_levels: [2, 3]
         fpn_interp_model: nearest
+
     memory_attention:
       _target_: sam2.modeling.memory_attention.MemoryAttention
       d_model: 256
@@ -114,6 +118,7 @@ trainer:
           dropout: 0.1
           kv_in_dim: 64
       num_layers: 4
+
     memory_encoder:
         _target_: sam2.modeling.memory_encoder.MemoryEncoder
         out_dim: 64
@@ -138,7 +143,7 @@ trainer:
             layer_scale_init_value: 1.0e-06
             use_dwconv: True  # depth-wise convs
           num_layers: 2
-    
+
     num_maskmem: 7
     image_size: ${scratch.resolution}
     # apply scaled sigmoid on mask logits for memory encoder, and directly feed input mask as output mask
@@ -189,24 +194,34 @@ trainer:
     rand_init_cond_frames_for_train: True  # random 1~2
     num_correction_pt_per_frame: 7
     use_act_ckpt_iterative_pt_sampling: false
+    
+
+    
     num_init_cond_frames_for_eval: 1  # only mask on the first frame
     forward_backbone_per_frame_for_eval: True
-  
+    
+
   data:
     train:
       _target_: training.dataset.sam2_datasets.TorchTrainMixedDataset
-      phases_per_epoch: ${scratch.phases_per_epoch} # Chunks a single epoch into smaller phases 
+      phases_per_epoch: ${scratch.phases_per_epoch} # Chunks a single epoch into smaller phases
       batch_sizes: # List of batch sizes corresponding to each dataset
         - ${scratch.train_batch_size} # Batch size of dataset 1, here we are using only one dataset but we can use multiple at a time
-      
+
       datasets:
-        # - _target_: training.dataset.utils.RepeatFactorWrapper
-        #   dataset:
-        #     _target_: training.dataset.utils.ConcatDataset
-        #     datasets:
-        - _target_: training.dataset.vos_raw_dataset.SA1BRawDataset  # Replace VOSDataset with ImageDataset
+        - _target_: training.dataset.vos_dataset.VOSDataset
+          transforms: ${vos.train_transforms}
           training: true
-      
+          video_dataset:
+            _target_: training.dataset.vos_raw_dataset.SA1BRawDataset
+            img_folder: ${dataset.img_folder}
+            gt_folder: ${dataset.gt_folder}
+            # file_list_txt: ${dataset.file_list_txt}
+          multiplier: ${dataset.multiplier}
+          sampler:
+            _target_: training.dataset.vos_sampler.RandomUniformSampler
+            num_frames: 1
+            max_num_objects: ${scratch.max_num_objects}
       shuffle: True
       num_workers: ${scratch.num_train_workers}
       pin_memory: True
@@ -215,16 +230,20 @@ trainer:
         _target_: training.utils.data_utils.collate_fn
         _partial_: true
         dict_key: all
+
   optim:
     amp:
       enabled: True
       amp_dtype: bfloat16
+
     optimizer:
       _target_: torch.optim.AdamW
+
     gradient_clip:
       _target_: training.optimizer.GradientClipper
       max_norm: 0.1
       norm_type: 2
+
     param_group_modifiers:
       - _target_: training.optimizer.layer_decay_param_modifier
         _partial_: True
@@ -233,10 +252,11 @@ trainer:
         overrides:
           - pattern: '*pos_embed*'
             value: 1.0
+
     options:
       lr:
         - scheduler:
-            _target_: fvcore.common.param_scheduler.CosineParamScheduler
+            _target_: fvcore.common.param_scheduler.CosineParamScheduler # https://github.com/facebookresearch/fvcore/blob/main/fvcore/common/param_scheduler.py (variant of cosine annealing) 
             start_value: ${scratch.base_lr}
             end_value: ${divide:${scratch.base_lr},10}
         - scheduler:
@@ -269,9 +289,11 @@ trainer:
       pred_obj_scores: true
       focal_gamma_obj_score: 0.0
       focal_alpha_obj_score: -1.0
+
   distributed:
     backend: nccl # nccl if linux is used, gloo if windows is used
     find_unused_parameters: True
+
   logging:
     tensorboard_writer:
       _target_: training.utils.logger.make_tensorboard_logger
@@ -280,7 +302,9 @@ trainer:
       should_log: True
     log_dir: ${launcher.experiment_log_dir}/logs
     log_freq: 10
-  # Initialize from a SAM 2 checkpoint
+    
+
+  # initialize from a SAM 2 checkpoint
   checkpoint:
     save_dir: ${launcher.experiment_log_dir}/checkpoints
     save_freq: 0 # 0 only last checkpoint is saved.
@@ -290,9 +314,10 @@ trainer:
       strict: True
       ignore_unexpected_keys: null
       ignore_missing_keys: null
+
       state_dict:
         _target_: training.utils.checkpoint_utils.load_checkpoint_and_apply_kernels
-        checkpoint_path: ./checkpoints/sam2.1_hiera_base_plus.pt # PATH to SAM 2.1 checkpoint
+        checkpoint_path: sam2_logs_2/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
         ckpt_state_dict_keys: ['model']
 
 launcher: # Hydra comes with a simple launcher that runs the jobs locally and serially
@@ -310,3 +335,4 @@ submitit:
   timeout_hour: 24
   name: null
   port_range: [10000, 65000]
+

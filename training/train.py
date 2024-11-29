@@ -125,9 +125,9 @@ def main(args) -> None:
     if cfg.launcher.experiment_log_dir is None:
         cfg.launcher.experiment_log_dir = os.path.join(
             os.getcwd(), "sam2_logs") # , args.config
-    print("###################### Train App Config ####################")
+    # print("###################### Train App Config ####################")
     # print(OmegaConf.to_yaml(cfg))
-    print("############################################################")
+    # print("############################################################")
 
     add_pythonpath_to_sys_path()
     makedir(cfg.launcher.experiment_log_dir)
@@ -219,9 +219,9 @@ def main(args) -> None:
                     ["--cpu-bind", submitit_conf.srun_args.cpu_bind]
                 )
 
-        print("###################### SLURM Config ####################")
-        print(job_kwargs)
-        print("##########################################")
+        # print("###################### SLURM Config ####################")
+        # print(job_kwargs)
+        # print("##########################################")
         executor.update_parameters(**job_kwargs)
 
         main_port = random.randint(
@@ -229,7 +229,7 @@ def main(args) -> None:
         )
         runner = SubmititRunner(main_port, cfg)
         job = executor.submit(runner)
-        print(f"Submitit Job ID: {job.job_id}")
+        # print(f"Submitit Job ID: {job.job_id}")
         runner.setup_job_info(job.job_id, rank=0)
     else:
         cfg.launcher.num_nodes = 1
