@@ -5,7 +5,7 @@ scratch:
   num_epochs: 120 # total 280
   resolution: 640
   train_batch_size: 1 #4 till 71 epochs
-  num_train_workers: 10
+  num_train_workers: 6
   max_num_objects: 50
   base_lr: 5e-6 #5e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs, 1e-6 for finetuning Set1 for 250 epochs
   vision_lr: 3e-6 # 3e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs, 1e-6 for finetuning Set1 for 250 epochs
@@ -224,7 +224,7 @@ trainer:
             max_num_objects: ${scratch.max_num_objects}
       shuffle: True
       num_workers: ${scratch.num_train_workers}
-      pin_memory: True
+      pin_memory: False
       drop_last: True
       collate_fn:
         _target_: training.utils.data_utils.collate_fn
@@ -317,7 +317,7 @@ trainer:
 
       state_dict:
         _target_: training.utils.checkpoint_utils.load_checkpoint_and_apply_kernels
-        checkpoint_path: sam2_logs_2/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
+        checkpoint_path: sam2_logs_set3_part2/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
         ckpt_state_dict_keys: ['model']
 
 launcher: # Hydra comes with a simple launcher that runs the jobs locally and serially

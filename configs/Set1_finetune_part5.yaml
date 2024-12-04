@@ -224,7 +224,7 @@ trainer:
             max_num_objects: ${scratch.max_num_objects}
       shuffle: True
       num_workers: ${scratch.num_train_workers}
-      pin_memory: True
+      pin_memory: False
       drop_last: True
       collate_fn:
         _target_: training.utils.data_utils.collate_fn
@@ -317,7 +317,7 @@ trainer:
 
       state_dict:
         _target_: training.utils.checkpoint_utils.load_checkpoint_and_apply_kernels
-        checkpoint_path: sam2_logs_4/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
+        checkpoint_path: sam2_logs_set3_part4/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
         ckpt_state_dict_keys: ['model']
 
 launcher: # Hydra comes with a simple launcher that runs the jobs locally and serially

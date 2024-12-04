@@ -61,9 +61,6 @@ CORE_LOSS_KEY = "core_loss"
 
 
 def unwrap_ddp_if_wrapped(model):
-    """
-    Model .pt file trained using multiple GPUs is not the same as .pt from a single GPU
-    """
     if isinstance(model, torch.nn.parallel.DistributedDataParallel):
         return model.module
     return model
@@ -72,7 +69,7 @@ def unwrap_ddp_if_wrapped(model):
 @dataclass
 class OptimAMPConf:
     enabled: bool = False
-    amp_dtype: str = "bfloat16" # float16
+    amp_dtype: str = "float16"
 
 
 @dataclass
@@ -174,6 +171,16 @@ class Trainer:
 
         self._setup_env_variables(env_variables)
         self._setup_timers()
+
+        # Profiling GPU memory usage when setting up model components
+        # with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True) as prof:
+        #     with record_function("model_initialization"): # Add a Label
+        #         self._setup_components()  # Setup model, loss, optimizer, etc.
+        
+        # # Log the GPU memory profiling summary after initializing the model
+        # if self.distributed_rank == 0:
+        #     logging.info("Memory profiling summary during model setup:")
+        #     logging.info(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=20))
 
         self.data_conf = data
         self.model_conf = model
@@ -459,38 +466,26 @@ class Trainer:
         model: nn.Module,
         phase: str,
     ):
-        
-        # Wrap the entire forward pass and loss calculation with profiling
-        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True) as loss_profiler:
-            with record_function("forward_and_loss_computation"):
-                
-                outputs = model(batch)
-                targets = batch.masks
-                batch_size = len(batch.img_batch)
 
-                key = batch.dict_key  # key for dataset
-                
-                # Specifically add profiling for focal loss
-                with record_function("sigmoid_focal_loss"):
-                    loss = self.loss[key](outputs, targets)
-                    
-                loss_str = f"Losses/{phase}_{key}_loss"
-                loss_log_str = os.path.join("Step_Losses", loss_str)
+        outputs = model(batch)
+        targets = batch.masks
+        batch_size = len(batch.img_batch)
 
-                # loss contains multiple sub-components we wish to log
-                step_losses = {}
-                if isinstance(loss, dict):
-                    step_losses.update(
-                        {f"Losses/{phase}_{key}_{k}": v for k, v in loss.items()}
-                    )
-                    loss = self._log_loss_detailed_and_return_core_loss(
-                        loss, loss_log_str, self.steps[phase]
-                    )
-            
-        # Log the memory usage specifically for the loss calculation step
-        if self.distributed_rank == 0:
-            logging.info("Memory profiling summary during forward and loss computation:")
-            logging.info(loss_profiler.key_averages().table(sort_by="cuda_memory_usage", row_limit=10))
+        key = batch.dict_key  # key for dataset
+        loss = self.loss[key](outputs, targets)
+        loss_str = f"Losses/{phase}_{key}_loss"
+
+        loss_log_str = os.path.join("Step_Losses", loss_str)
+
+        # loss contains multiple sub-components we wish to log
+        step_losses = {}
+        if isinstance(loss, dict):
+            step_losses.update(
+                {f"Losses/{phase}_{key}_{k}": v for k, v in loss.items()}
+            )
+            loss = self._log_loss_detailed_and_return_core_loss(
+                loss, loss_log_str, self.steps[phase]
+            )
 
         if self.steps[phase] % self.logging_conf.log_scalar_frequency == 0:
             self.logger.log(
@@ -697,7 +692,7 @@ class Trainer:
             # measure data loading time
             data_time.update(time.time() - end)
 
-            batch = batch.to(self.device, non_blocking=False) # non_blocking=True
+            batch = batch.to(self.device, non_blocking=False)
 
             # compute output
             with torch.no_grad():
@@ -778,6 +773,157 @@ class Trainer:
             f"Trainer/steps_{phase}": self.steps[phase],
         }
 
+    """
+    # def train_epoch(self, train_loader):
+
+    #     # Init stat meters
+    #     batch_time_meter = AverageMeter("Batch Time", self.device, ":.2f")
+    #     data_time_meter = AverageMeter("Data Time", self.device, ":.2f")
+    #     mem_meter = MemMeter("Mem (GB)", self.device, ":.2f")
+    #     data_times = []
+    #     phase = Phase.TRAIN
+
+    #     iters_per_epoch = len(train_loader)
+
+    #     loss_names = []
+    #     for batch_key in self.loss.keys():
+    #         loss_names.append(f"Losses/{phase}_{batch_key}_loss")
+
+    #     loss_mts = OrderedDict(
+    #         [(name, AverageMeter(name, self.device, ":.2e")) for name in loss_names]
+    #     )
+    #     extra_loss_mts = {}
+
+    #     progress = ProgressMeter(
+    #         iters_per_epoch,
+    #         [
+    #             batch_time_meter,
+    #             data_time_meter,
+    #             mem_meter,
+    #             self.time_elapsed_meter,
+    #             *loss_mts.values(),
+    #         ],
+    #         self._get_meters([phase]),
+    #         prefix="Train Epoch: [{}]".format(self.epoch),
+    #     )
+
+    #     # Model training loop
+    #     self.model.train()
+    #     end = time.time()
+
+    #     for data_iter, batch in enumerate(train_loader):
+    #         # measure data loading time
+    #         data_time_meter.update(time.time() - end)
+    #         data_times.append(data_time_meter.val)
+    #         batch = batch.to(
+    #             self.device, non_blocking=True
+    #         )  # move tensors in a tensorclass
+
+    #         # Adding the profiler here for each batch
+    #         with profile(
+    #             activities=[
+    #                 ProfilerActivity.CPU,
+    #                 ProfilerActivity.CUDA
+    #             ],
+    #             record_shapes=True,
+    #             profile_memory=True,
+    #             with_stack=True
+    #         ) as prof:
+    #             # Wrapping each training step
+    #             with record_function("batch_train"):
+
+    #                 try:
+    #                     self._run_step(batch, phase, loss_mts, extra_loss_mts)
+
+    #                     # compute gradient and do optim step
+    #                     exact_epoch = self.epoch + float(data_iter) / iters_per_epoch
+    #                     self.where = float(exact_epoch) / self.max_epochs
+    #                     assert self.where <= 1 + self.EPSILON
+    #                     if self.where < 1.0:
+    #                         self.optim.step_schedulers(
+    #                             self.where, step=int(exact_epoch * iters_per_epoch)
+    #                         )
+    #                     else:
+    #                         logging.warning(
+    #                             f"Skipping scheduler update since the training is at the end, i.e, {self.where} of [0,1]."
+    #                         )
+
+    #                     # Log schedulers
+    #                     if data_iter % self.logging_conf.log_scalar_frequency == 0:
+    #                         for j, param_group in enumerate(self.optim.optimizer.param_groups):
+    #                             for option in self.optim.schedulers[j]:
+    #                                 optim_prefix = (
+    #                                     "" + f"{j}_"
+    #                                     if len(self.optim.optimizer.param_groups) > 1
+    #                                     else ""
+    #                                 )
+    #                                 self.logger.log(
+    #                                     os.path.join("Optim", f"{optim_prefix}", option),
+    #                                     param_group[option],
+    #                                     self.steps[phase],
+    #                                 )
+
+    #                     # Clipping gradients and detecting diverging gradients
+    #                     if self.gradient_clipper is not None:
+    #                         self.scaler.unscale_(self.optim.optimizer)
+    #                         self.gradient_clipper(model=self.model)
+
+    #                     if self.gradient_logger is not None:
+    #                         self.gradient_logger(
+    #                             self.model, rank=self.distributed_rank, where=self.where
+    #                         )
+
+    #                     # Optimizer step: the scaler will make sure gradients are not
+    #                     # applied if the gradients are infinite
+    #                     self.scaler.step(self.optim.optimizer)
+    #                     self.scaler.update()
+
+    #                     # measure elapsed time
+    #                     batch_time_meter.update(time.time() - end)
+    #                     end = time.time()
+
+    #                     self.time_elapsed_meter.update(
+    #                         time.time() - self.start_time + self.ckpt_time_elapsed
+    #                     )
+
+    #                     mem_meter.update(reset_peak_usage=True)
+    #                     if data_iter % self.logging_conf.log_freq == 0:
+    #                         progress.display(data_iter)
+
+    #                     if data_iter % self.logging_conf.log_scalar_frequency == 0:
+    #                         # Log progress meters.
+    #                         for progress_meter in progress.meters:
+    #                             self.logger.log(
+    #                                 os.path.join("Step_Stats", phase, progress_meter.name),
+    #                                 progress_meter.val,
+    #                                 self.steps[phase],
+    #                             )
+
+    #                 # Catching NaN/Inf errors in the loss
+    #                 except FloatingPointError as e:
+    #                     raise e
+            
+    #         # Print profiling summary for each batch
+    #         if self.distributed_rank == 0:
+    #             logging.info(prof.key_averages().table(sort_by="cuda_memory_usage", row_limit=20))
+
+    #     self.est_epoch_time[Phase.TRAIN] = batch_time_meter.avg * iters_per_epoch
+    #     self._log_timers(Phase.TRAIN)
+    #     self._log_sync_data_times(Phase.TRAIN, data_times)
+
+    #     out_dict = self._log_meters_and_save_best_ckpts([Phase.TRAIN])
+
+    #     for k, v in loss_mts.items():
+    #         out_dict[k] = v.avg
+    #     for k, v in extra_loss_mts.items():
+    #         out_dict[k] = v.avg
+    #     out_dict.update(self._get_trainer_state(phase))
+    #     logging.info(f"Losses and meters: {out_dict}")
+    #     self._reset_meters([phase])
+    #     return out_dict
+    """
+    
+
     def train_epoch(self, train_loader):
 
         # Initialization for memory meters
@@ -825,8 +971,6 @@ class Trainer:
             batch = batch.to(
                 self.device, non_blocking=True
             )  # move tensors in a tensorclass
-
-            torch.cuda.empty_cache()
 
             try:
                 self._run_step(batch, phase, loss_mts, extra_loss_mts)

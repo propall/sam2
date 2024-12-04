@@ -17,14 +17,14 @@ import torch
 from hydra import compose, initialize_config_module
 from hydra.utils import instantiate
 
-from iopath.common.file_io import g_pathmgr
+from iopath.common.file_io import g_pathmgr # https://github.com/facebookresearch/iopath/blob/main/iopath/common/file_io.py
 from omegaconf import OmegaConf
 
 from training.utils.train_utils import makedir, register_omegaconf_resolvers
 
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
-
+# single_proc_run fn. handles process on a single GPU 
 def single_proc_run(local_rank, main_port, cfg, world_size):
     """Single GPU process"""
     os.environ["MASTER_ADDR"] = "localhost"
@@ -33,6 +33,7 @@ def single_proc_run(local_rank, main_port, cfg, world_size):
     os.environ["LOCAL_RANK"] = str(local_rank)
     os.environ["WORLD_SIZE"] = str(world_size)
     try:
+        # Load basic fns.(get_class, get_method, add, times, divide, pow, subtract, range, int, ceil_int, merge)
         register_omegaconf_resolvers()
     except Exception as e:
         logging.info(e)
@@ -43,6 +44,7 @@ def single_proc_run(local_rank, main_port, cfg, world_size):
 
 def single_node_runner(cfg, main_port: int):
     assert cfg.launcher.num_nodes == 1
+    # No. of GPUs
     num_proc = cfg.launcher.gpus_per_node
     torch.multiprocessing.set_start_method(
         "spawn"
@@ -121,29 +123,35 @@ def add_pythonpath_to_sys_path():
 
 
 def main(args) -> None:
+    # Read cfg from yaml file
     cfg = compose(config_name=args.config)
+
+    # Create Folder for experiment
     if cfg.launcher.experiment_log_dir is None:
         cfg.launcher.experiment_log_dir = os.path.join(
             os.getcwd(), "sam2_logs") # , args.config
-    # print("###################### Train App Config ####################")
-    # print(OmegaConf.to_yaml(cfg))
-    # print("############################################################")
-
     add_pythonpath_to_sys_path()
     makedir(cfg.launcher.experiment_log_dir)
+
+    # print(OmegaConf.to_yaml(cfg)) # Print yaml config file
+
+    # Make a copy of config file inside Experimental folder
     with g_pathmgr.open(
         os.path.join(cfg.launcher.experiment_log_dir, "config.yaml"), "w"
     ) as f:
         f.write(OmegaConf.to_yaml(cfg))
 
-    cfg_resolved = OmegaConf.to_container(cfg, resolve=False)
+    # Create DictConfig using yaml config with original placeholders 
+    cfg_resolved = OmegaConf.to_container(cfg, resolve=False) # https://omegaconf.readthedocs.io/en/2.1_branch/usage.html
     cfg_resolved = OmegaConf.create(cfg_resolved)
 
+    # Create DictConfig using yaml config with replaced variables
     with g_pathmgr.open(
         os.path.join(cfg.launcher.experiment_log_dir, "config_resolved.yaml"), "w"
     ) as f:
         f.write(OmegaConf.to_yaml(cfg_resolved, resolve=True))
 
+    # Obtain submitit based params for SLURM jobs
     submitit_conf = cfg.get("submitit", None)
     assert submitit_conf is not None, "Missing submitit config"
 
@@ -174,6 +182,7 @@ def main(args) -> None:
         submitit_conf.qos = (
             args.qos if args.qos is not None else submitit_conf.get("qos", None)
         )
+
         job_kwargs = {
             "timeout_min": 60 * submitit_conf.timeout_hour,
             "name": (
@@ -219,9 +228,8 @@ def main(args) -> None:
                     ["--cpu-bind", submitit_conf.srun_args.cpu_bind]
                 )
 
-        # print("###################### SLURM Config ####################")
-        # print(job_kwargs)
-        # print("##########################################")
+        # print(job_kwargs) # SLURM Config
+
         executor.update_parameters(**job_kwargs)
 
         main_port = random.randint(
@@ -241,7 +249,9 @@ def main(args) -> None:
 
 if __name__ == "__main__":
 
-    initialize_config_module("sam2", version_base="1.2")
+    # Initialise Hydra
+    initialize_config_module("sam2", version_base="1.2") # https://github.com/facebookresearch/hydra/blob/main/examples/jupyter_notebooks/compose_configs_in_notebook.ipynb
+    # Accept arguments
     parser = ArgumentParser()
     parser.add_argument(
         "-c",
@@ -263,7 +273,10 @@ if __name__ == "__main__":
         "--num-gpus", type=int, default=None, help="number of GPUS per node"
     )
     parser.add_argument("--num-nodes", type=int, default=None, help="Number of nodes")
+    # Collect arguments as a parser
     args = parser.parse_args()
     args.use_cluster = bool(args.use_cluster) if args.use_cluster is not None else None
+    # Collection of utility fns.
     register_omegaconf_resolvers()
+    
     main(args)

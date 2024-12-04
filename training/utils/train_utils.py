@@ -50,8 +50,8 @@ class Phase:
 
 
 def register_omegaconf_resolvers():
-    OmegaConf.register_new_resolver("get_method", hydra.utils.get_method)
     OmegaConf.register_new_resolver("get_class", hydra.utils.get_class)
+    OmegaConf.register_new_resolver("get_method", hydra.utils.get_method)
     OmegaConf.register_new_resolver("add", lambda x, y: x + y)
     OmegaConf.register_new_resolver("times", multiply_all)
     OmegaConf.register_new_resolver("divide", lambda x, y: x / y)
@@ -227,7 +227,6 @@ def human_readable_time(time_seconds):
     hours, minutes = divmod(minutes, 60)
     days, hours = divmod(hours, 24)
     return f"{days:02}d {hours:02}h {minutes:02}m"
-
 
 class DurationMeter:
     def __init__(self, name, device, fmt=":f"):

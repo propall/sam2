@@ -2,13 +2,13 @@
 
 scratch:
   num_frames: 1
-  num_epochs: 50
+  num_epochs: 500 # total 280
   resolution: 640
-  train_batch_size: 4 #4 till 71 epochs
+  train_batch_size: 2 #4 till 71 epochs
   num_train_workers: 10
   max_num_objects: 50
-  base_lr: 5.0e-06 #5e-6 till 71 epochs
-  vision_lr: 3.0e-06 # 3e-6 till 71 epochs
+  base_lr: 4.0e-06 #5e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs
+  vision_lr: 2.0e-06 # 3e-6 till 71 epochs, 2e-6 till 280 epochs, 1e-6 till 500 epochs, 9e-5 till 700 epochs
   phases_per_epoch: 1
 
 dataset:
@@ -24,6 +24,28 @@ vos:
   train_transforms:
     - _target_: training.dataset.transforms.ComposeAPI
       transforms:
+        # Add RandomInvert as one of the first transforms
+        # - _target_: training.dataset.transforms.RandomInvertAPI
+        #   consistent_transform: True
+        #   p: 0.5  # 50% chance of inversion
+        
+        # Or use the adaptive version 
+        - _target_: training.dataset.transforms.AdaptiveRandomInvertAPI
+          consistent_transform: True
+          p: 0.5
+          bg_threshold: 240  # Threshold for detecting white background
+
+        # - _target_: training.dataset.transforms.AutoAugmentAPI
+        #   consistent_transform: True
+        #   policy: "AutoAugmentPolicy.CIFAR10"
+        
+        # - _target_: training.dataset.transforms.AugMixAPI
+        #   consistent_transform: True
+        #   severity: 3
+        #   width: 3
+        #   depth: -1
+        #   alpha: 1.0
+
         - _target_: training.dataset.transforms.RandomHorizontalFlip
           consistent_transform: True
         - _target_: training.dataset.transforms.RandomAffine
@@ -231,40 +253,44 @@ trainer:
         dict_key: all
 
   optim:
+    # Automatic Mixed Precision (AMP) enables mixed-precision training to speed up computations and reduce memory usage
     amp:
       enabled: True
-      amp_dtype: bfloat16
+      amp_dtype: bfloat16 # Brain Float 16 datatype, range comparable to float32 but precision is same as float16
 
     optimizer:
-      _target_: torch.optim.AdamW
+      _target_: torch.optim.AdamW # AdamW (Adam with decoupled weight decay)
 
-    gradient_clip:
+    gradient_clip: # Gradient Clipping prevents exploding gradients during backpropagation by limiting the magnitude of gradients.
+    # If the total gradient magnitude exceeds max_norm, gradients are scaled down proportionally to fit within this limit.
       _target_: training.optimizer.GradientClipper
-      max_norm: 0.1
-      norm_type: 2
+      max_norm: 0.1 # maximum allowed norm for the gradients 
+      norm_type: 2 # Specifies the type of norm, here its L2 norm
 
-    param_group_modifiers:
-      - _target_: training.optimizer.layer_decay_param_modifier
-        _partial_: True
-        layer_decay_value: 0.9
-        apply_to: 'image_encoder.trunk'
-        overrides:
-          - pattern: '*pos_embed*'
-            value: 1.0
+    param_group_modifiers: # Customizes learning rates for different groups of model parameters, often using layer-wise learning rate decay.
+      - _target_: training.optimizer.layer_decay_param_modifier # applies a decaying learning rate across the layers of the model
+        _partial_: True # Indicates that the configuration is partial and allows combining default arguments with the ones explicitly specified here.
+        layer_decay_value: 0.9 # layer decay factor. Layers closer to the output use lower learning rates, calculated by multiplying the base learning rate by layer_decay_value raised to the layer index.
+        # For example, if the base LR is 0.001 and layer_decay_value = 0.9, Layer 1 would use 0.0009, Layer 2 would use 0.00081, and so on.
+        apply_to: 'image_encoder.trunk' # this layer-wise decay is applied to the parameters of the image_encoder.trunk
+        overrides: # Allows exceptions to the default decay rule
+          - pattern: '*pos_embed*' # Targets positional embedding parameters.
+            value: 1.0 # Specifies no decay for these parameters
 
     options:
-      lr:
+      lr: # Two learning rate schedulers are defined one for base learning rate and another for the vision-specific learning rate(for image encoder)
         - scheduler:
-            _target_: fvcore.common.param_scheduler.CosineParamScheduler
-            start_value: ${scratch.base_lr}
-            end_value: ${divide:${scratch.base_lr},10}
+            _target_: fvcore.common.param_scheduler.CosineParamScheduler # Cosine Annealing
+            start_value: ${scratch.base_lr} # starting learning rate
+            end_value: ${divide:${scratch.base_lr},10} # ending learning rate is 1/10th of the starting learning rate 
         - scheduler:
-            _target_: fvcore.common.param_scheduler.CosineParamScheduler
-            start_value: ${scratch.vision_lr}
-            end_value: ${divide:${scratch.vision_lr},10}
+            _target_: fvcore.common.param_scheduler.CosineParamScheduler # Cosine Annealing
+            start_value: ${scratch.vision_lr} # starting learning rate
+            end_value: ${divide:${scratch.vision_lr},10} # ending learning rate is 1/10th of the starting learning rate
           param_names:
-            - 'image_encoder.*'
-      weight_decay:
+            - 'image_encoder.*' # pecifies that the second scheduler applies to parameters matching the pattern 'image_encoder.*'
+
+      weight_decay: # Two Constant weight decay schedulers 
         - scheduler:
             _target_: fvcore.common.param_scheduler.ConstantParamScheduler
             value: 0.1
@@ -272,8 +298,8 @@ trainer:
             _target_: fvcore.common.param_scheduler.ConstantParamScheduler
             value: 0.0
           param_names:
-            - '*bias*'
-          module_cls_names: ['torch.nn.LayerNorm']
+            - '*bias*' # Ensures that bias parameters are excluded from weight decay
+          module_cls_names: ['torch.nn.LayerNorm'] # Specifies layers/modules that are exempt from weight decay  
 
   loss:
     all:
@@ -316,7 +342,7 @@ trainer:
 
       state_dict:
         _target_: training.utils.checkpoint_utils.load_checkpoint_and_apply_kernels
-        checkpoint_path: ./checkpoints/sam2.1_hiera_base_plus.pt # PATH to SAM 2.1 checkpoint
+        checkpoint_path: checkpoints/sam2.1_hiera_small.pt # PATH to SAM 2.1 checkpoint
         ckpt_state_dict_keys: ['model']
 
 launcher: # Hydra comes with a simple launcher that runs the jobs locally and serially

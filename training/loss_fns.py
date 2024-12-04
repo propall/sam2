@@ -53,8 +53,8 @@ def sigmoid_focal_loss(
     inputs,
     targets,
     num_objects,
-    alpha: float = 0.25,
-    gamma: float = 2,
+    alpha: torch.bfloat16 = 0.25,
+    gamma: torch.bfloat16 = 2,
     loss_on_multimask=False,
 ):
     """
@@ -74,14 +74,32 @@ def sigmoid_focal_loss(
     Returns:
         focal loss tensor
     """
+    # print(f"Inputs dType:{inputs.dtype}")
+    # Precompute the sigmoid to avoid recalculating it multiple times
     prob = inputs.sigmoid()
+    
+    # Use binary cross entropy with logits to compute the base cross entropy loss
     ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    # print(f"ce_loss dType:{ce_loss.dtype}")
+    
+    # Use in-place operations to save memory
     p_t = prob * targets + (1 - prob) * (1 - targets)
-    loss = ce_loss * ((1 - p_t) ** gamma)
+    
+    modulating_factor = (1 - p_t).pow_(gamma)  # In-place power to reduce memory footprint
+    # print(f"modulating_factor dType:{modulating_factor.dtype}")
+    
+    # Multiply with cross-entropy loss and modulating factor
+    loss = ce_loss * modulating_factor
 
+    # Optional: Delete intermediate variables to free up memory
+    # del ce_loss, p_t, modulating_factor
+
+    torch.cuda.empty_cache()
+
+    # Apply alpha balancing if alpha >= 0
     if alpha >= 0:
         alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-        loss = alpha_t * loss
+        loss *= alpha_t # In-place multiplication to reduce memory footprint
 
     if loss_on_multimask:
         # loss is [N, M, H, W] where M corresponds to multiple predicted masks
@@ -110,8 +128,8 @@ def iou_loss(
     assert inputs.dim() == 4 and targets.dim() == 4
     pred_mask = inputs.flatten(2) > 0
     gt_mask = targets.flatten(2) > 0
-    area_i = torch.sum(pred_mask & gt_mask, dim=-1).float()
-    area_u = torch.sum(pred_mask | gt_mask, dim=-1).float()
+    area_i = torch.sum(pred_mask & gt_mask, dim=-1).bfloat16() # float()
+    area_u = torch.sum(pred_mask | gt_mask, dim=-1).bfloat16()
     actual_ious = area_i / torch.clamp(area_u, min=1.0)
 
     if use_l1_loss:
@@ -167,7 +185,7 @@ class MultiStepMultiMasksAndIous(nn.Module):
     def forward(self, outs_batch: List[Dict], targets_batch: torch.Tensor):
         assert len(outs_batch) == len(targets_batch)
         num_objects = torch.tensor(
-            (targets_batch.shape[1]), device=targets_batch.device, dtype=torch.float
+            (targets_batch.shape[1]), device=targets_batch.device, dtype=torch.bfloat16
         )  # Number of objects is fixed within a batch
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_objects)
@@ -195,7 +213,7 @@ class MultiStepMultiMasksAndIous(nn.Module):
         If `supervise_all_iou` is True, we backpropagate ious losses for all predicted masks.
         """
 
-        target_masks = targets.unsqueeze(1).float()
+        target_masks = targets.unsqueeze(1).bfloat16()
         assert target_masks.dim() == 4  # [N, 1, H, W]
         src_masks_list = outputs["multistep_pred_multimasks_high_res"]
         ious_list = outputs["multistep_pred_ious"]
@@ -244,7 +262,7 @@ class MultiStepMultiMasksAndIous(nn.Module):
         else:
             target_obj = torch.any((target_masks[:, 0] > 0).flatten(1), dim=-1)[
                 ..., None
-            ].float()
+            ].bfloat16()
             loss_class = sigmoid_focal_loss(
                 object_score_logits,
                 target_obj,

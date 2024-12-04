@@ -224,7 +224,7 @@ trainer:
             max_num_objects: ${scratch.max_num_objects}
       shuffle: True
       num_workers: ${scratch.num_train_workers}
-      pin_memory: True
+      pin_memory: False
       drop_last: True
       collate_fn:
         _target_: training.utils.data_utils.collate_fn
@@ -292,7 +292,7 @@ trainer:
 
   distributed:
     backend: nccl # nccl if linux is used, gloo if windows is used
-    find_unused_parameters: True
+    find_unused_parameters: True # This cant be false to calculate loss 
 
   logging:
     tensorboard_writer:
@@ -317,13 +317,13 @@ trainer:
 
       state_dict:
         _target_: training.utils.checkpoint_utils.load_checkpoint_and_apply_kernels
-        checkpoint_path: sam2_logs_1/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
+        checkpoint_path: sam2_logs_set3_part1/checkpoints/checkpoint.pt # floorSeg_checkpoint_epoch500
         ckpt_state_dict_keys: ['model']
 
 launcher: # Hydra comes with a simple launcher that runs the jobs locally and serially
   num_nodes: 1
   gpus_per_node: 1 # No. of GPUs in machine
-  experiment_log_dir: null # Path to log directory, defaults to ./sam2_logs/${config_name}
+  experiment_log_dir: sam2_logs_set3_part2 # Path to log directory, defaults to ./sam2_logs/${config_name}
 
 # SLURM args if running on a cluster
 submitit:
